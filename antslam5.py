@@ -1,0 +1,614 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.widgets import Button, Slider
+import random
+from collections import deque
+import math
+from dataclasses import dataclass
+from typing import List, Tuple, Optional
+import time
+import pandas as pd
+
+@dataclass
+class Point:
+    x: float
+    y: float
+    
+    def distance_to(self, other: 'Point') -> float:
+        return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
+
+@dataclass
+class Landmark:
+    position: Point
+    id: int
+    observed_count: int = 0
+    last_observed: float = 0.0
+
+class AntSLAM:
+    def __init__(self, width: int = 800, height: int = 600):
+        self.width = width
+        self.height = height
+        self.pheromone_map = PheromoneMap(width, height)
+        self.ants = []
+        self.obstacles = []
+        self.food_sources = []
+        self.nest_location = Point(width // 2, height // 2)
+
+        # Metrics tracking
+        self.food_collected_history = []
+        self.pheromone_level_history = []
+        self.time_step = 0
+
+        # Create initial setup
+        self.setup_environment()
+
+        # Visualization
+        self.fig, self.ax = plt.subplots(figsize=(12, 8))
+        self.ax.set_xlim(0, width)
+        self.ax.set_ylim(0, height)
+        self.ax.set_aspect('equal')
+        self.ax.set_title('AntSLAM - Ant Colony Simultaneous Localization and Mapping')
+
+        # Stats window
+        self.fig_stats, self.ax_stats = plt.subplots(figsize=(6, 4))
+        self.ax_stats.set_title("AntSLAM Metrics")
+        self.ax_stats.set_xlabel("Time Step")
+        self.ax_stats.set_ylabel("Values")
+
+        # Control variables
+        self.running = False
+        self.show_pheromones = True
+        self.show_paths = True
+        self.edit_mode = False
+
+        # Setup UI
+        self.setup_ui()
+
+        # Animation
+        self.animation = None
+
+    def update(self, frame):
+        if not self.running:
+            return
+
+        speed_multiplier = self.slider_speed.val
+        self.pheromone_map.evaporation_rate = self.slider_evaporation.val
+
+        for ant in self.ants:
+            ant.speed = 2.0 * speed_multiplier
+            ant.move(self.pheromone_map, self.obstacles, self.food_sources, (self.width, self.height))
+            ant.deposit_pheromone(self.pheromone_map)
+
+        self.pheromone_map.evaporate()
+        self.update_display()
+
+        # Track metrics
+        food_carriers = sum(1 for ant in self.ants if ant.has_food)
+        total_pheromones = np.sum(self.pheromone_map.pheromone_grid)
+        self.food_collected_history.append(food_carriers)
+        self.pheromone_level_history.append(total_pheromones)
+        self.time_step += 1
+
+        # Update stats plot
+        self.ax_stats.clear()
+        self.ax_stats.set_title("AntSLAM Metrics")
+        self.ax_stats.set_xlabel("Time Step")
+        self.ax_stats.plot(self.food_collected_history, label="Food Carriers", color='green')
+        self.ax_stats.plot(self.pheromone_level_history, label="Total Pheromone", color='red')
+        self.ax_stats.legend()
+        self.fig_stats.canvas.draw()
+
+    def run(self):
+        self.update_display()
+        plt.show(block=False)  # Show main window non-blocking
+        self.fig_stats.show()
+
+    def save_metrics_to_csv(self, filename="ant_slam_data.csv"):
+        df = pd.DataFrame({
+            "Time Step": range(len(self.food_collected_history)),
+            "Food Carriers": self.food_collected_history,
+            "Total Pheromone": self.pheromone_level_history
+        })
+        df.to_csv(filename, index=False)
+
+
+class Ant:
+    def __init__(self, start_pos: Point, ant_id: int):
+        self.position = start_pos
+        self.id = ant_id
+        self.path = [Point(start_pos.x, start_pos.y)]
+        self.visited_landmarks = set()
+        self.pheromone_trail = []
+        self.energy = 100.0
+        self.carrying_food = False
+        self.exploration_radius = 5.0
+        
+    def move(self, direction: float, distance: float):
+        """Move ant in given direction"""
+        new_x = self.position.x + distance * math.cos(direction)
+        new_y = self.position.y + distance * math.sin(direction)
+        self.position = Point(new_x, new_y)
+        self.path.append(Point(new_x, new_y))
+        self.energy -= 0.1
+        
+    def deposit_pheromone(self, strength: float = 1.0):
+        """Deposit pheromone at current position"""
+        self.pheromone_trail.append({
+            'position': Point(self.position.x, self.position.y),
+            'strength': strength,
+            'timestamp': time.time()
+        })
+
+class PheromoneMap:
+    def __init__(self, width: int, height: int, resolution: float = 0.5):
+        self.width = width
+        self.height = height
+        self.resolution = resolution
+        self.grid_width = int(width / resolution)
+        self.grid_height = int(height / resolution)
+        self.pheromone_grid = np.zeros((self.grid_height, self.grid_width))
+        self.decay_rate = 0.95
+        
+    def add_pheromone(self, pos: Point, strength: float):
+        """Add pheromone at given position"""
+        grid_x = int(pos.x / self.resolution)
+        grid_y = int(pos.y / self.resolution)
+        
+        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
+            self.pheromone_grid[grid_y, grid_x] += strength
+            
+    def get_pheromone_strength(self, pos: Point) -> float:
+        """Get pheromone strength at position"""
+        grid_x = int(pos.x / self.resolution)
+        grid_y = int(pos.y / self.resolution)
+        
+        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
+            return self.pheromone_grid[grid_y, grid_x]
+        return 0.0
+        
+    def evaporate(self):
+        """Evaporate pheromones over time"""
+        self.pheromone_grid *= self.decay_rate
+
+class OccupancyGrid:
+    def __init__(self, width: int, height: int, resolution: float = 0.2):
+        self.width = width
+        self.height = height
+        self.resolution = resolution
+        self.grid_width = int(width / resolution)
+        self.grid_height = int(height / resolution)
+        # 0 = unknown, 1 = free, -1 = occupied
+        self.grid = np.zeros((self.grid_height, self.grid_width))
+        
+    def update_cell(self, pos: Point, value: int):
+        """Update occupancy grid cell"""
+        grid_x = int(pos.x / self.resolution)
+        grid_y = int(pos.y / self.resolution)
+        
+        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
+            self.grid[grid_y, grid_x] = value
+            
+    def is_free(self, pos: Point) -> bool:
+        """Check if position is free"""
+        grid_x = int(pos.x / self.resolution)
+        grid_y = int(pos.y / self.resolution)
+        
+        if 0 <= grid_x < self.grid_width and 0 <= grid_y < self.grid_height:
+            return self.grid[grid_y, grid_x] >= 0
+        return False
+
+class AntSLAM:
+    def __init__(self, map_width: int = 50, map_height: int = 50):
+        self.map_width = map_width
+        self.map_height = map_height
+        self.ants = []
+        self.landmarks = []
+        self.obstacles = []
+        self.food_sources = []
+        self.nest_position = Point(25, 25)
+        
+        # SLAM components
+        self.pheromone_map = PheromoneMap(map_width, map_height)
+        self.occupancy_grid = OccupancyGrid(map_width, map_height)
+        self.estimated_position = Point(25, 25)
+        self.position_history = [Point(25, 25)]
+        
+        # Visualization
+        self.fig, self.axes = plt.subplots(2, 2, figsize=(15, 12))
+        self.fig.suptitle('AntSLAM: Ant Colony Optimization with SLAM', fontsize=16)
+        
+        # Initialize with some obstacles and food sources
+        self.create_random_environment()
+        self.create_ant_colony(10)
+        
+        # Interactive elements
+        self.setup_interactive_controls()
+        
+    def create_random_environment(self):
+        """Create random obstacles and food sources"""
+        # Add obstacles
+        for _ in range(8):
+            x = random.uniform(5, self.map_width - 5)
+            y = random.uniform(5, self.map_height - 5)
+            width = random.uniform(2, 5)
+            height = random.uniform(2, 5)
+            self.obstacles.append({
+                'position': Point(x, y),
+                'width': width,
+                'height': height
+            })
+            
+        # Add food sources
+        for _ in range(5):
+            x = random.uniform(10, self.map_width - 10)
+            y = random.uniform(10, self.map_height - 10)
+            # Ensure food is not on obstacles
+            valid_position = True
+            for obs in self.obstacles:
+                if (obs['position'].x <= x <= obs['position'].x + obs['width'] and
+                    obs['position'].y <= y <= obs['position'].y + obs['height']):
+                    valid_position = False
+                    break
+            if valid_position:
+                self.food_sources.append(Point(x, y))
+                
+    def create_ant_colony(self, num_ants: int):
+        """Create colony of ants"""
+        for i in range(num_ants):
+            # Start ants near nest with some random offset
+            start_x = self.nest_position.x + random.uniform(-2, 2)
+            start_y = self.nest_position.y + random.uniform(-2, 2)
+            ant = Ant(Point(start_x, start_y), i)
+            self.ants.append(ant)
+            
+    def setup_interactive_controls(self):
+        """Setup interactive controls for the visualization"""
+        # Add control buttons
+        ax_button = plt.axes([0.02, 0.02, 0.1, 0.05])
+        self.start_button = Button(ax_button, 'Start/Stop')
+        self.start_button.on_clicked(self.toggle_simulation)
+        
+        ax_reset = plt.axes([0.15, 0.02, 0.1, 0.05])
+        self.reset_button = Button(ax_reset, 'Reset')
+        self.reset_button.on_clicked(self.reset_simulation)
+        
+        ax_add_food = plt.axes([0.28, 0.02, 0.1, 0.05])
+        self.add_food_button = Button(ax_add_food, 'Add Food')
+        self.add_food_button.on_clicked(self.add_food_source)
+        
+        # Speed slider
+        ax_speed = plt.axes([0.45, 0.02, 0.2, 0.03])
+        self.speed_slider = Slider(ax_speed, 'Speed', 0.1, 2.0, valinit=1.0)
+        
+        self.simulation_running = False
+        self.speed_factor = 1.0
+        
+    def toggle_simulation(self, event):
+        """Toggle simulation on/off"""
+        self.simulation_running = not self.simulation_running
+        if self.simulation_running:
+            self.run_simulation()
+            
+    def reset_simulation(self, event):
+        """Reset simulation"""
+        self.simulation_running = False
+        self.ants.clear()
+        self.landmarks.clear()
+        self.pheromone_map = PheromoneMap(self.map_width, self.map_height)
+        self.occupancy_grid = OccupancyGrid(self.map_width, self.map_height)
+        self.position_history = [Point(25, 25)]
+        self.create_ant_colony(10)
+        self.update_visualization()
+        
+    def add_food_source(self, event):
+        """Add food source at random location"""
+        x = random.uniform(10, self.map_width - 10)
+        y = random.uniform(10, self.map_height - 10)
+        self.food_sources.append(Point(x, y))
+        self.update_visualization()
+        
+    def calculate_ant_movement(self, ant: Ant) -> Tuple[float, float]:
+        """Calculate ant movement based on pheromone trails and exploration"""
+        # If carrying food, return to nest
+        if ant.carrying_food:
+            dx = self.nest_position.x - ant.position.x
+            dy = self.nest_position.y - ant.position.y
+            distance = math.sqrt(dx**2 + dy**2)
+            if distance > 0:
+                return math.atan2(dy, dx), min(1.0, distance)
+        
+        # Explore for food
+        best_direction = random.uniform(0, 2 * math.pi)
+        best_score = 0
+        
+        # Check multiple directions
+        for angle in np.linspace(0, 2 * math.pi, 16):
+            test_x = ant.position.x + 3 * math.cos(angle)
+            test_y = ant.position.y + 3 * math.sin(angle)
+            test_pos = Point(test_x, test_y)
+            
+            # Check if position is valid
+            if not self.is_valid_position(test_pos):
+                continue
+                
+            score = 0
+            
+            # Pheromone attraction
+            pheromone_strength = self.pheromone_map.get_pheromone_strength(test_pos)
+            score += pheromone_strength * 0.5
+            
+            # Food attraction
+            for food in self.food_sources:
+                distance = test_pos.distance_to(food)
+                if distance < 5:
+                    score += 10 / (distance + 0.1)
+                    
+            # Exploration bonus (avoid visited areas)
+            exploration_bonus = 1.0
+            for visited_pos in ant.path[-10:]:  # Check last 10 positions
+                if test_pos.distance_to(visited_pos) < 2:
+                    exploration_bonus -= 0.1
+            score += exploration_bonus
+            
+            if score > best_score:
+                best_score = score
+                best_direction = angle
+                
+        return best_direction, 1.0
+        
+    def is_valid_position(self, pos: Point) -> bool:
+        """Check if position is valid (not in obstacle)"""
+        if pos.x < 0 or pos.x >= self.map_width or pos.y < 0 or pos.y >= self.map_height:
+            return False
+            
+        for obs in self.obstacles:
+            if (obs['position'].x <= pos.x <= obs['position'].x + obs['width'] and
+                obs['position'].y <= pos.y <= obs['position'].y + obs['height']):
+                return False
+                
+        return True
+        
+    def update_ants(self):
+        """Update ant positions and behaviors"""
+        for ant in self.ants:
+            if ant.energy <= 0:
+                continue
+                
+            # Calculate movement
+            direction, distance = self.calculate_ant_movement(ant)
+            
+            # Move ant
+            ant.move(direction, distance)
+            
+            # Check for food pickup
+            if not ant.carrying_food:
+                for food in self.food_sources[:]:
+                    if ant.position.distance_to(food) < 1.5:
+                        ant.carrying_food = True
+                        ant.deposit_pheromone(2.0)
+                        break
+                        
+            # Check if returned to nest with food
+            if ant.carrying_food and ant.position.distance_to(self.nest_position) < 2:
+                ant.carrying_food = False
+                ant.energy = 100.0  # Replenish energy
+                ant.deposit_pheromone(1.5)
+                
+            # Deposit pheromone
+            if len(ant.path) % 5 == 0:  # Every 5 steps
+                strength = 1.0 if ant.carrying_food else 0.3
+                ant.deposit_pheromone(strength)
+                self.pheromone_map.add_pheromone(ant.position, strength)
+                
+            # Update occupancy grid
+            self.occupancy_grid.update_cell(ant.position, 1)  # Mark as free
+            
+        # Evaporate pheromones
+        self.pheromone_map.evaporate()
+        
+    def update_slam(self):
+        """Update SLAM estimation"""
+        # Simple SLAM update based on ant positions
+        if self.ants:
+            # Use average ant position as rough position estimate
+            avg_x = sum(ant.position.x for ant in self.ants) / len(self.ants)
+            avg_y = sum(ant.position.y for ant in self.ants) / len(self.ants)
+            self.estimated_position = Point(avg_x, avg_y)
+            self.position_history.append(Point(avg_x, avg_y))
+            
+            # Keep history manageable
+            if len(self.position_history) > 100:
+                self.position_history = self.position_history[-100:]
+                
+        # Update landmarks based on ant observations
+        for ant in self.ants:
+            for food in self.food_sources:
+                if ant.position.distance_to(food) < 5:
+                    # Check if landmark already exists
+                    existing_landmark = None
+                    for landmark in self.landmarks:
+                        if landmark.position.distance_to(food) < 2:
+                            existing_landmark = landmark
+                            break
+                            
+                    if existing_landmark:
+                        existing_landmark.observed_count += 1
+                        existing_landmark.last_observed = time.time()
+                    else:
+                        new_landmark = Landmark(
+                            position=Point(food.x, food.y),
+                            id=len(self.landmarks),
+                            observed_count=1,
+                            last_observed=time.time()
+                        )
+                        self.landmarks.append(new_landmark)
+                        
+    def update_visualization(self):
+        """Update all visualization plots"""
+        for ax in self.axes.flat:
+            ax.clear()
+            
+        # Plot 1: Main environment view
+        ax1 = self.axes[0, 0]
+        ax1.set_title('Environment & Ant Paths')
+        ax1.set_xlim(0, self.map_width)
+        ax1.set_ylim(0, self.map_height)
+        
+        # Draw obstacles
+        for obs in self.obstacles:
+            rect = patches.Rectangle(
+                (obs['position'].x, obs['position'].y),
+                obs['width'], obs['height'],
+                linewidth=1, edgecolor='black', facecolor='gray'
+            )
+            ax1.add_patch(rect)
+            
+        # Draw food sources
+        for food in self.food_sources:
+            ax1.plot(food.x, food.y, 'go', markersize=8, label='Food')
+            
+        # Draw nest
+        ax1.plot(self.nest_position.x, self.nest_position.y, 'bs', markersize=12, label='Nest')
+        
+        # Draw ant paths
+        colors = plt.cm.tab10(np.linspace(0, 1, len(self.ants)))
+        for i, ant in enumerate(self.ants):
+            if len(ant.path) > 1:
+                path_x = [p.x for p in ant.path]
+                path_y = [p.y for p in ant.path]
+                ax1.plot(path_x, path_y, color=colors[i], alpha=0.6, linewidth=1)
+                
+            # Draw ant position
+            color = 'red' if ant.carrying_food else 'blue'
+            ax1.plot(ant.position.x, ant.position.y, 'o', color=color, markersize=4)
+            
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Pheromone map
+        ax2 = self.axes[0, 1]
+        ax2.set_title('Pheromone Distribution')
+        im = ax2.imshow(self.pheromone_map.pheromone_grid, 
+                       cmap='YlOrRd', origin='lower', 
+                       extent=[0, self.map_width, 0, self.map_height])
+        plt.colorbar(im, ax=ax2, label='Pheromone Strength')
+        
+        # Plot 3: Occupancy grid (SLAM map)
+        ax3 = self.axes[1, 0]
+        ax3.set_title('SLAM Occupancy Grid')
+        occupancy_display = np.copy(self.occupancy_grid.grid)
+        occupancy_display[occupancy_display == 0] = 0.5  # Unknown = gray
+        im2 = ax3.imshow(occupancy_display, cmap='RdYlBu', origin='lower',
+                        extent=[0, self.map_width, 0, self.map_height])
+        plt.colorbar(im2, ax=ax3, label='Occupancy (-1=occupied, 0=unknown, 1=free)')
+        
+        # Draw estimated position and trajectory
+        if self.position_history:
+            hist_x = [p.x for p in self.position_history]
+            hist_y = [p.y for p in self.position_history]
+            ax3.plot(hist_x, hist_y, 'r-', linewidth=2, label='Estimated Path')
+            ax3.plot(self.estimated_position.x, self.estimated_position.y, 
+                    'ro', markersize=8, label='Current Estimate')
+            
+        # Draw landmarks
+        for landmark in self.landmarks:
+            ax3.plot(landmark.position.x, landmark.position.y, 'g^', 
+                    markersize=6, label='Landmark' if landmark.id == 0 else '')
+            
+        ax3.legend()
+        
+        # Plot 4: Statistics
+        ax4 = self.axes[1, 1]
+        ax4.set_title('Colony Statistics')
+        
+        # Ant energy levels
+        energies = [ant.energy for ant in self.ants]
+        carrying_food = sum(1 for ant in self.ants if ant.carrying_food)
+        
+        stats_text = f"""
+        Active Ants: {len([ant for ant in self.ants if ant.energy > 0])}
+        Carrying Food: {carrying_food}
+        Avg Energy: {np.mean(energies):.1f}
+        Food Sources: {len(self.food_sources)}
+        Landmarks: {len(self.landmarks)}
+        Pheromone Strength: {np.sum(self.pheromone_map.pheromone_grid):.1f}
+        """
+        
+        ax4.text(0.1, 0.5, stats_text, transform=ax4.transAxes, 
+                fontsize=12, verticalalignment='center')
+        
+        # Energy histogram
+        if energies:
+            ax4_twin = ax4.twinx()
+            ax4_twin.hist(energies, bins=10, alpha=0.7, color='skyblue')
+            ax4_twin.set_ylabel('Energy Distribution')
+            
+        ax4.set_xlim(0, 1)
+        ax4.set_ylim(0, 1)
+        ax4.axis('off')
+        
+        plt.tight_layout()
+        plt.draw()
+        
+    def run_simulation(self):
+        """Run the main simulation loop"""
+        try:
+            while self.simulation_running:
+                self.speed_factor = self.speed_slider.val
+                
+                # Update simulation
+                self.update_ants()
+                self.update_slam()
+                
+                # Update visualization
+                self.update_visualization()
+                
+                # Control simulation speed
+                plt.pause(0.1 / self.speed_factor)
+                
+        except KeyboardInterrupt:
+            self.simulation_running = False
+            
+    def save_results(self, filename: str = 'antslam_results.npz'):
+        """Save simulation results"""
+        # Prepare data for saving
+        ant_paths = []
+        for ant in self.ants:
+            path_data = [(p.x, p.y) for p in ant.path]
+            ant_paths.append(path_data)
+            
+        position_history = [(p.x, p.y) for p in self.position_history]
+        
+        np.savez(filename,
+                ant_paths=ant_paths,
+                position_history=position_history,
+                pheromone_grid=self.pheromone_map.pheromone_grid,
+                occupancy_grid=self.occupancy_grid.grid,
+                food_sources=[(f.x, f.y) for f in self.food_sources],
+                obstacles=self.obstacles)
+        
+        print(f"Results saved to {filename}")
+
+def main():
+    """Main function to run AntSLAM simulation"""
+    print("AntSLAM: Ant Colony Optimization with SLAM")
+    print("Controls:")
+    print("- Start/Stop: Toggle simulation")
+    print("- Reset: Reset simulation")
+    print("- Add Food: Add random food source")
+    print("- Speed slider: Control simulation speed")
+    print("- Close window to exit")
+    
+    # Create and run simulation
+    slam = AntSLAM(map_width=50, map_height=50)
+    slam.update_visualization()
+    
+    # Show plot
+    plt.show()
+    
+    # Save results when done
+    slam.save_results()
+
+if __name__ == "__main__":
+    main()
