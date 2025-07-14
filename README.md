@@ -8,7 +8,7 @@ A clean, modular, and well-visualized simulation of a single ant exploring a 2D 
 
 ## Features
 - **Single Ant Explorer**: Simulates a single ant navigating, foraging, and learning via pheromones.
-- **2D and 3D Environments**: Choose between 2D (`antslam9.py and antslam10`) and 3D (`antslam11.py`) worlds.
+- **2D and 3D Environments**: Choose between 2D (`antslam9.py and antslam10.py`) and 3D (`antslam11.py`) worlds.
 - **Pheromone-based Learning**: Ant deposits and follows pheromone trails, balancing exploration and exploitation.
 - **Obstacles & Food**: Randomly placed obstacles and food sources; ant returns food to the nest.
 - **Real-time Visualization**: 
