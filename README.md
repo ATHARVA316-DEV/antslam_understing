@@ -53,6 +53,8 @@ You can adjust simulation parameters (grid size, number of food/obstacles, phero
 
 ## Screenshots
 <img width="1913" height="1078" alt="Screenshot 2025-07-14 212557" src="https://github.com/user-attachments/assets/6eddfbc0-fa21-4abe-b471-41a7a86cb29b" />
+<img width="1919" height="1079" alt="Screenshot 2025-07-14 213026" src="https://github.com/user-attachments/assets/9dafab3b-a67a-4ac5-882a-e619e008d37e" />
+<img width="1919" height="1071" alt="Screenshot 2025-07-14 213717" src="https://github.com/user-attachments/assets/dd9af37d-bfea-44f4-90b2-46f4465d167b" />
 
 
 ## Credits
