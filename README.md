@@ -35,30 +35,28 @@ A clean, modular, and well-visualized simulation of a single ant exploring a 2D 
 
 ### 2D Simulation
 ```bash
-python antslam_simulation.py
+python antslam10.py
 ```
 
 ### 3D Simulation
 ```bash
-python antslam_simulation_3d.py
+python antslam11.py
 ```
 
 - The 3D version includes a slider to select the Z-slice for 2D map views.
 - All visualizations update in real time.
 
-## File Structure
-- `antslam_simulation.py` — 2D AntSLAM simulation
-- `antslam_simulation_3d.py` — 3D AntSLAM simulation
-- `README.md` — Project documentation
+
 
 ## Customization
 You can adjust simulation parameters (grid size, number of food/obstacles, pheromone decay, etc.) at the top of each script.
 
 ## Screenshots
-_Add screenshots here after running the simulation!_
+<img width="1913" height="1078" alt="Screenshot 2025-07-14 212557" src="https://github.com/user-attachments/assets/6eddfbc0-fa21-4abe-b471-41a7a86cb29b" />
+
 
 ## Credits
-- Developed by [Your Name]
+- Developed by Atharva M
 - Inspired by natural ant behavior, ACO, and SLAM research
 
 ## License
